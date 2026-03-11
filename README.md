@@ -20,7 +20,6 @@ The server was configured with SSH key authentication, password login was disabl
 
 ## Server Information
 
-- **Server IP:** `46.225.118.7`
 - **Operating System:** `Ubuntu`
 - **Web Server:** `NGINX`
 - **Project Repository:** `v-server-setup`
