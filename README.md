@@ -236,9 +236,9 @@ Never put `docker system prune --volumes` into an automatic job: it deletes unus
 
 ### 6. Docker from the official repository
 
-**What:** Docker Engine and the Compose plugin from Docker's apt repository, with the signing key checked and bound to that repository only, and hardened daemon defaults.
+**What:** Docker Engine and the Compose plugin from Docker's apt repository, following the [Docker install guide](https://docs.docker.com/engine/install/ubuntu/), with the signing key checked and bound to that repository only, and hardened daemon defaults.
 
-**Why:** the official repository is a traceable source for a current engine, unlike piping `get.docker.com` into a root shell, and its key is trusted only after the fingerprint matches the [Docker install guide](https://docs.docker.com/engine/install/ubuntu/), bound by `Signed-By` to this repository only (the old `apt-key` trusted it for every source). The admin account stays out of the group `docker`, because that group is effectively root (`docker run -v /:/host ...`) and would skip the sudo password; the admin uses `sudo docker`.
+**Why:** the official repository is a traceable source for a current engine, unlike piping `get.docker.com` into a root shell, and its key is trusted only after the fingerprint matches Docker's release key, bound by `Signed-By` to this repository only (the old `apt-key` trusted it for every source). The admin account stays out of the group `docker`, because that group is effectively root (`docker run -v /:/host ...`) and would skip the sudo password; the admin uses `sudo docker`.
 
 **Commands:**
 
@@ -249,7 +249,10 @@ sudo apt install -y ca-certificates curl
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
-gpg --show-keys /etc/apt/keyrings/docker.asc   # compare with the fingerprint in Docker's docs; stop if it differs
+gpg --show-keys /etc/apt/keyrings/docker.asc   # verify the fingerprint before trusting the repository
+# 9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88
+# uid  Docker Release (CE deb) <docker@docker.com>
+# stop if it differs
 
 # repository, key bound to it
 sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
@@ -292,6 +295,12 @@ sudo systemctl is-active docker containerd     # active, active
 sudo docker info --format 'Logging: {{.LoggingDriver}} | LiveRestore: {{.LiveRestoreEnabled}} | Security: {{.SecurityOptions}}'
 # Logging: json-file | LiveRestore: true | Security: [... no-new-privileges]
 sudo docker run --rm alpine grep NoNewPrivs /proc/self/status   # NoNewPrivs: 1
+
+# log rotation on a real container, not only in the daemon config
+sudo docker run --name hw hello-world                            # "Hello from Docker!"
+sudo docker inspect hw --format '{{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Config}}'
+# json-file map[max-file:3 max-size:10m]
+sudo docker rm hw && sudo docker image rm hello-world alpine     # clean up the test
 ```
 
 ### 7. Deploy user
