@@ -75,7 +75,7 @@ ssh -i ~/.ssh/id_ed25519 <admin-user>@<host>    # login without a password promp
 
 **What:** turn off password, keyboard-interactive and root logins in a drop-in file, test in a second session before closing the first, keep a rollback ready.
 
-**Why:** Ubuntu reads `/etc/ssh/sshd_config.d/*.conf` before the main file, and sshd keeps the **first** value it finds. Cloud images ship `50-cloud-init.conf` with `PasswordAuthentication yes`, which silently wins over an edit in `sshd_config`. That happened here: the first test still showed a password prompt. A file named `00-hardening.conf` is read first, so its values win.
+**Why:** sshd reads the drop-ins in `/etc/ssh/sshd_config.d/` before the main file and keeps the **first** value it finds, so the cloud image's `50-cloud-init.conf` (`PasswordAuthentication yes`) silently won over the edit in `sshd_config` here and the first test still showed a password prompt. `00-hardening.conf` is read first and wins; `50-cloud-init.conf` is corrected as well, and cloud-init is told not to turn password login back on.
 
 **Commands:**
 
@@ -87,18 +87,19 @@ PermitRootLogin no
 PubkeyAuthentication yes
 X11Forwarding no
 EOF
-# also set PasswordAuthentication no in 50-cloud-init.conf, and stop cloud-init from turning it back on
+sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config.d/50-cloud-init.conf
 echo 'ssh_pwauth: false' | sudo tee /etc/cloud/cloud.cfg.d/99-disable-pwauth.cfg
 sudo sshd -t && sudo systemctl restart ssh
 ```
 
 Keep this session open. Open a second terminal and log in again. Only close the first session once the second login works.
 
-Rollback, in the session that is still open:
+Rollback, in the session that is still open (undoes all three changes):
 
 ```bash
-sudo rm /etc/ssh/sshd_config.d/00-hardening.conf
-sudo systemctl restart ssh
+sudo rm /etc/ssh/sshd_config.d/00-hardening.conf /etc/cloud/cloud.cfg.d/99-disable-pwauth.cfg
+sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config.d/50-cloud-init.conf
+sudo sshd -t && sudo systemctl restart ssh
 ```
 
 **Verify:**
@@ -135,7 +136,7 @@ Test-NetConnection <host> -Port <other-port>   # TcpTestSucceeded : False
 sudo ss -tlnp
 ```
 
-Everything except SSH, 80 and 443 has to be bound to loopback (`localhost`) or stay inside Docker networks. Repeat this check after every new stack.
+Everything except SSH, 80 and 443 has to be bound to loopback (`127.0.0.1`) or stay inside Docker networks. Repeat this check after every new stack.
 
 ### 4. Automatic security updates
 
@@ -154,6 +155,7 @@ sudo dpkg-reconfigure --priority=low unattended-upgrades
 
 ```bash
 systemctl status unattended-upgrades --no-pager      # active
+systemctl list-timers apt-daily-upgrade.timer --no-pager   # next run listed
 cat /etc/apt/apt.conf.d/20auto-upgrades              # both values "1"
 sudo unattended-upgrade --dry-run --debug            # dry run without installing
 ls /var/run/reboot-required 2>/dev/null              # exists only when a reboot is due
@@ -165,11 +167,7 @@ The log is in `/var/log/unattended-upgrades/`.
 
 **What:** time in UTC and synchronised, a swap file used only under memory pressure, a weekly Docker cleanup that never touches volumes.
 
-**Why:**
-
-- **UTC and NTP:** logs, CI runs and certificates all count in UTC, with no jumps at daylight saving time. TLS, token lifetimes and the order of log entries depend on a correct clock.
-- **Swap:** without swap the kernel kills a process at once when memory runs out, in the worst case Postgres while writing. Swap is the safety net for peaks (video encoding, the LLM); `vm.swappiness=10` means swapping only under pressure. The real protection are memory limits per container in Compose. The swap file belongs to root with mode `600`, because memory pages, secrets included, can land in it.
-- **Docker cleanup:** deployments pull images by digest, and old versions stay on disk. A weekly systemd timer removes unused images and build cache older than 7 days. Volumes hold databases and media, so the cleanup never touches them. A systemd timer instead of cron logs to the journal, catches up on missed runs and only starts once Docker runs.
+**Why:** a correct clock in UTC keeps TLS, token lifetimes and log order right without daylight-saving jumps, and swap with `vm.swappiness=10` is a safety net against the OOM killer during peaks (video encoding, the LLM), not a replacement for memory limits per container. Old image versions pile up after every deploy, so a systemd timer (journal, catch-up after downtime) removes them weekly, but never volumes, which hold databases and media.
 
 **Commands:**
 
@@ -180,7 +178,7 @@ timedatectl                                   # time zone UTC stays
 # swap (ext4; on btrfs swap files need a different procedure)
 findmnt -no FSTYPE /
 sudo fallocate -l 4G /swapfile
-sudo chmod 600 /swapfile
+sudo chmod 600 /swapfile                      # root only: memory pages, secrets included, can land in swap
 sudo mkswap /swapfile
 sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
@@ -240,11 +238,7 @@ Never put `docker system prune --volumes` into an automatic job: it deletes unus
 
 **What:** Docker Engine and the Compose plugin from Docker's apt repository, with the signing key checked and bound to that repository only, and hardened daemon defaults.
 
-**Why:**
-
-- The official repository gives a current engine and Compose v2 from a traceable source. The `get.docker.com` script piped into a shell would run unchecked code as root.
-- The key is trusted only after its fingerprint matches the one published in the [Docker install guide](https://docs.docker.com/engine/install/ubuntu/). With `Signed-By` in a deb822 source it is valid for this repository only; the old `apt-key` trusted keys for every source.
-- The admin account is **not** in the group `docker`: that group is effectively root (`docker run -v /:/host ...`) and would skip the sudo password. The admin uses `sudo docker`.
+**Why:** the official repository is a traceable source for a current engine, unlike piping `get.docker.com` into a root shell, and its key is trusted only after the fingerprint matches the [Docker install guide](https://docs.docker.com/engine/install/ubuntu/), bound by `Signed-By` to this repository only (the old `apt-key` trusted it for every source). The admin account stays out of the group `docker`, because that group is effectively root (`docker run -v /:/host ...`) and would skip the sudo password; the admin uses `sudo docker`.
 
 **Commands:**
 
@@ -346,9 +340,11 @@ The server's host key fingerprint (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key
 sudo -l -U <deploy-user>          # not allowed to run sudo
 sudo passwd -S <deploy-user>      # L (password locked)
 # effective config per user, compared side by side
-F='^(permittty|allowtcpforwarding|allowagentforwarding|x11forwarding|permittunnel|passwordauthentication|permitrootlogin)'
-sudo sshd -T -C user=<deploy-user>,host=test,addr=::1 | grep -Ei "$F"   # all "no"
-sudo sshd -T -C user=<admin-user>,host=test,addr=::1  | grep -Ei "$F"   # permittty and allowtcpforwarding yes
+F='^(permittty|allowtcpforwarding|allowagentforwarding|allowstreamlocalforwarding|x11forwarding|permittunnel|passwordauthentication|permitrootlogin)'
+sudo sshd -T -C user=<deploy-user>,host=test,addr=127.0.0.1 | grep -Ei "$F"   # all "no"
+sudo sshd -T -C user=<admin-user>,host=test,addr=127.0.0.1  | grep -Ei "$F"
+# admin: permittty, allowtcpforwarding, allowagentforwarding, allowstreamlocalforwarding yes;
+#        x11forwarding, permittunnel, passwordauthentication, permitrootlogin no
 ```
 
 ```bash
@@ -367,14 +363,14 @@ Not done on purpose: rootless Docker (the proxy could not bind 80/443 without ex
 
 | Network | Members | Route to the internet |
 |---|---|---|
-| `edge` | Caddy and the services it routes to | yes |
+| `edge` | Caddy and the project services it serves | yes |
 | internal network per project stack | app, database, cache | no |
 | `outbound` per stack | only services that must call out (mail, monitoring checks, GitHub and Telegram for the assistant) | yes |
 | `monitoring` | Caddy and Uptime Kuma, status page only | no |
 | `incident` | Uptime Kuma and the incident assistant, alert webhook only | no |
 | `llm` | incident assistant and Ollama | no |
 
-The local LLM ([vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant)) runs only in `llm` and never has internet access; the model is downloaded once by a separate setup service. Containers drop all capabilities they do not need (Caddy keeps only the one to bind 80/443), run with `no-new-privileges` and are pinned by digest. Caddy has its admin API off, sets security headers (HSTS, `nosniff`, referrer policy), removes the `Server` header and writes no access log, because activation and reset tokens are part of request paths.
+The local LLM ([vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant)) runs only in `llm` and never has internet access; the model is downloaded once by a separate setup service. Caddy, Uptime Kuma, the incident assistant, Ollama and the Videoflix application containers drop all capabilities and set `no-new-privileges` (Caddy keeps only the one to bind 80/443). The Videoflix database and cache keep Docker's default capabilities and get `no-new-privileges` from the daemon default (step 6). Every image is pinned by digest. Caddy has its admin API off, sets security headers (HSTS, `nosniff`, referrer policy), removes the `Server` header and writes no access log, because activation and reset tokens are part of request paths.
 
 **Commands:** the stack is started from the repository, see [vps-edge](https://github.com/PhilippKlinger/vps-edge#usage-on-the-server). A new project gets one file in `sites/` and joins `edge` as an external network.
 
@@ -417,7 +413,11 @@ Rollback by hand: start the deploy workflow with an earlier digest; the history 
 curl -s https://videoflix.philipp-klinger.com/api/health/      # {"status":"ok","database":"ok","cache":"ok"}
 ```
 
-On the server, `docker compose images` in the stack shows the same digests as the last deploy summary in GitHub Actions.
+```bash
+# server: the image reference each service was started with
+sudo -u <deploy-user> sh -c 'cd <stack-dir> && docker compose ps --format "{{.Service}} {{.Image}}"'
+# web ghcr.io/...@sha256:<digest>   same digest as in the last deploy summary in GitHub Actions
+```
 
 ### 10. Monitoring
 
@@ -429,7 +429,7 @@ On the server, `docker compose images` in the stack shows the same digests as th
 
 ```bash
 # local machine: open the dashboard through a tunnel to the loopback-bound port
-ssh -L <dashboard-port>:localhost:<dashboard-port> <admin-user>@<host>
+ssh -L <dashboard-port>:127.0.0.1:<dashboard-port> <admin-user>@<host>
 # then browse http://localhost:<dashboard-port>
 ```
 
@@ -452,14 +452,17 @@ Limit: Kuma runs on the server it watches. If the whole server is down, no alert
 
 **Commands:** scripts and units are in [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy#backup-and-restore).
 
-- `backup.sh` writes the dump in Postgres custom format to a temporary file, reads its table of contents with `pg_restore --list` and only then renames it. A failed run leaves no file that looks like a backup. If the disk does not have twice the media size free, no archive is written and the run fails.
-- `restore-test.sh` creates the separate database, restores the dump with `--exit-on-error`, compares row counts of the main tables with the live database, checks that the media archive contains every file the database refers to, and drops the copy on exit, also on failure, because it contains personal data.
+- `backup.sh` writes each backup to a temporary file and renames it only after a check, so a failed run leaves nothing that looks like a backup.
+- `restore-test.sh` drops the throwaway database on exit, also on failure, because it contains personal data.
 
 ```bash
+# backup directory: owned by <deploy-user>, group-readable for <admin-user> to copy dumps off the server
+sudo install -d -m 2750 -o <deploy-user> -g <admin-user> <backup-dir>
 sudo cp <stack-dir>/backup/videoflix-backup.service <stack-dir>/backup/videoflix-backup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now videoflix-backup.timer
-sudo -u <deploy-user> <stack-dir>/backup/restore-test.sh
+# first backup by hand, including the media archive
+sudo -u <deploy-user> <stack-dir>/backup/backup.sh --with-media
 ```
 
 **Verify:**
