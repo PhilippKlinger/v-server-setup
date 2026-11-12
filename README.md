@@ -27,7 +27,7 @@ Placeholders: `<admin-user>` is the personal sudo account, `<deploy-user>` the a
 
 ## Task
 
-One server hosts several containerised projects behind a single reverse proxy with TLS, plus uptime monitoring with a public status page and a local LLM incident assistant. One person runs it. The setup has to be safe on the public internet, reproducible from this document and changeable without locking the admin out.
+One server hosts several containerised projects behind a single reverse proxy with TLS, plus uptime monitoring with a public status page and an incident assistant that drafts its analysis with an LLM on Amazon Bedrock (EU). One person runs it. The setup has to be safe on the public internet, reproducible from this document and changeable without locking the admin out.
 
 ## Problem
 
@@ -167,7 +167,7 @@ The log is in `/var/log/unattended-upgrades/`.
 
 **What:** time in UTC and synchronised, a swap file used only under memory pressure, a weekly Docker cleanup that never touches volumes.
 
-**Why:** a correct clock in UTC keeps TLS, token lifetimes and log order right without daylight-saving jumps, and swap with `vm.swappiness=10` is a safety net against the OOM killer during peaks (video encoding, the LLM), not a replacement for memory limits per container. Old image versions pile up after every deploy, so a systemd timer (journal, catch-up after downtime) removes them weekly, but never volumes, which hold databases and media.
+**Why:** a correct clock in UTC keeps TLS, token lifetimes and log order right without daylight-saving jumps, and swap with `vm.swappiness=10` is a safety net against the OOM killer during peaks (video encoding), not a replacement for memory limits per container. Old image versions pile up after every deploy, so a systemd timer (journal, catch-up after downtime) removes them weekly, but never volumes, which hold databases and media.
 
 **Commands:**
 
@@ -374,12 +374,11 @@ Not done on purpose: rootless Docker (the proxy could not bind 80/443 without ex
 |---|---|---|
 | `edge` | Caddy and the project services it serves | yes |
 | internal network per project stack | app, database, cache | no |
-| `outbound` per stack | only services that must call out (mail, monitoring checks, GitHub and Telegram for the assistant) | yes |
+| `outbound` per stack | only services that must call out (mail, monitoring checks, GitHub, Telegram and Amazon Bedrock for the assistant) | yes |
 | `monitoring` | Caddy and Uptime Kuma, status page only | no |
 | `incident` | Uptime Kuma and the incident assistant, alert webhook only | no |
-| `llm` | incident assistant and Ollama | no |
 
-The local LLM ([vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant)) runs only in `llm` and never has internet access; the model is downloaded once by a separate setup service. Caddy, Uptime Kuma, the incident assistant, Ollama and the Videoflix application containers drop all capabilities and set `no-new-privileges` (Caddy keeps only the one to bind 80/443). The Videoflix database and cache keep Docker's default capabilities and get `no-new-privileges` from the daemon default (step 6). Every image is pinned by digest. Caddy has its admin API off, sets security headers (HSTS, `nosniff`, referrer policy), removes the `Server` header and writes no access log, because activation and reset tokens are part of request paths.
+The incident assistant ([vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant)) reaches Amazon Bedrock only through its `outbound` network. Only public data goes there: the rule result, monitoring facts, changes from public repositories and runbook excerpts, processed in the EU; no personal data. Caddy, Uptime Kuma, the incident assistant and the Videoflix application containers drop all capabilities and set `no-new-privileges` (Caddy keeps only the one to bind 80/443). The Videoflix database and cache keep Docker's default capabilities and get `no-new-privileges` from the daemon default (step 6). Every image is pinned by digest. Caddy has its admin API off, sets security headers (HSTS, `nosniff`, referrer policy), removes the `Server` header and writes no access log, because activation and reset tokens are part of request paths.
 
 **Commands:** the stack is started from the repository, see [vps-edge](https://github.com/PhilippKlinger/vps-edge#usage-on-the-server). A new project gets one file in `sites/` and joins `edge` as an external network.
 
@@ -493,7 +492,7 @@ Limits: the backups stay on the VPS. They protect against bad deploys and delete
 - Security updates install themselves; time, swap and disk space are taken care of.
 - Docker from a verified source with log rotation, `live-restore` and `no-new-privileges`.
 - CI deploys with its own restricted account, one key per repository, images pinned by digest, a smoke test and automatic rollback.
-- Each stack has its own networks; databases and the LLM have no route to the internet.
+- Each stack has its own networks; databases have no route to the internet.
 - Monitoring from the outside with a public status page, and a nightly backup with a restore test.
 
 ```mermaid
@@ -505,12 +504,12 @@ flowchart LR
         apps["Project stacks<br/>(app, database, cache)"]
         kuma[Uptime Kuma]
         assistant[Incident assistant]
-        llm[Ollama]
         caddy -- edge --> apps
         caddy -- "monitoring<br/>status page only" --> kuma
         kuma -- incident --> assistant
-        assistant -- "llm<br/>no internet" --> llm
     end
+    bedrock["Amazon Bedrock (EU)"]
+    assistant -- "outbound<br/>public data only" --> bedrock
 ```
 
 ## Evidence
@@ -520,6 +519,6 @@ flowchart LR
 | [vps-edge](https://github.com/PhilippKlinger/vps-edge) | Caddy configuration, networks `edge` and `monitoring`, log retention, CI that tests the proxy |
 | [vps-monitoring](https://github.com/PhilippKlinger/vps-monitoring) | Uptime Kuma stack, status page allowlist, dashboard only through a tunnel |
 | [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy) | Images pinned by digest, deploy workflow with smoke test and rollback, backup and restore test |
-| [vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant) | Alert to GitHub issue, local LLM in an internal network without internet |
+| [vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant) | Alert to GitHub issue, analysis drafted with an LLM on Amazon Bedrock (EU), public data only |
 | [status.philipp-klinger.com](https://status.philipp-klinger.com) | Public status page |
 | [videoflix.philipp-klinger.com](https://videoflix.philipp-klinger.com) | The application running on this server |
