@@ -1,6 +1,8 @@
 # V-Server Setup and Hardening
 
-How the production VPS (Hostinger KVM, Ubuntu LTS, Frankfurt) was set up, hardened and is operated. Every step names the decision behind it and how to verify it.
+How the production VPS (Ubuntu LTS) was set up, hardened and is operated. Every step names the decision behind it and how to verify it.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Table of Contents
 
@@ -452,15 +454,13 @@ curl -sI https://status.philipp-klinger.com/status/videoflix | head -1    # 200
 curl -sI https://status.philipp-klinger.com/dashboard | head -1           # 404
 ```
 
-Limit: Kuma runs on the server it watches. If the whole server is down, no alert goes out; an external check is planned.
-
 ### 11. Backup and restore
 
 **What:** a systemd timer writes a Postgres dump every night and a media archive once a week. A restore test restores the newest backup into a separate throwaway database and checks it against the live data. The result is recorded in `restore-test.json` in [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy).
 
 **Why:** a backup counts only once a restore has worked. The restore test runs without touching live data or taking the site down, so it can be repeated at any time. The timer runs as `<deploy-user>`, catches up after downtime (`Persistent=true`) and keeps dumps for 14 days.
 
-**Commands:** scripts and units are in [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy#backup-and-restore).
+**Commands:** scripts and units are in [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy/blob/main/RUNBOOK.md#backup-and-restore).
 
 - `backup.sh` writes each backup to a temporary file and renames it only after a check, so a failed run leaves nothing that looks like a backup.
 - `restore-test.sh` drops the throwaway database on exit, also on failure, because it contains personal data.
@@ -482,8 +482,6 @@ systemctl list-timers videoflix-backup.timer --no-pager    # next run listed
 systemctl status videoflix-backup.service --no-pager       # status=0/SUCCESS after a run
 sudo -u <deploy-user> <stack-dir>/backup/restore-test.sh   # ends with "Restore test passed."
 ```
-
-Limits: the backups stay on the VPS. They protect against bad deploys and deleted data, not against losing the server; a dump is copied off the server by hand and stored encrypted. The `.env` files are not part of the backup; their values are kept in a password manager.
 
 ---
 
