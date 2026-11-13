@@ -20,6 +20,8 @@ How the production VPS (Hostinger KVM, Ubuntu LTS, Frankfurt) was set up, harden
   - [11. Backup and restore](#11-backup-and-restore)
 - [Solution](#solution)
 - [Evidence](#evidence)
+- [Related repositories](#related-repositories)
+- [License](#license)
 
 Placeholders: `<admin-user>` is the personal sudo account, `<deploy-user>` the account CI uses, `<host>` the server.
 
@@ -516,9 +518,20 @@ flowchart LR
 
 | Link | What it shows |
 |---|---|
+| [status.philipp-klinger.com](https://status.philipp-klinger.com) | Public status page |
+| [videoflix.philipp-klinger.com](https://videoflix.philipp-klinger.com) | The application running on this server |
+
+The configuration and CI behind each step live in the repositories below.
+
+## Related repositories
+
+| Repository | Role |
+|---|---|
 | [vps-edge](https://github.com/PhilippKlinger/vps-edge) | Caddy configuration, networks `edge` and `monitoring`, log retention, CI that tests the proxy |
 | [vps-monitoring](https://github.com/PhilippKlinger/vps-monitoring) | Uptime Kuma stack, status page allowlist, dashboard only through a tunnel |
 | [videoflix-deploy](https://github.com/PhilippKlinger/videoflix-deploy) | Images pinned by digest, deploy workflow with smoke test and rollback, backup and restore test |
 | [vps-incident-assistant](https://github.com/PhilippKlinger/vps-incident-assistant) | Alert to GitHub issue, analysis drafted with an LLM on Amazon Bedrock (EU), public data only |
-| [status.philipp-klinger.com](https://status.philipp-klinger.com) | Public status page |
-| [videoflix.philipp-klinger.com](https://videoflix.philipp-klinger.com) | The application running on this server |
+
+## License
+
+[MIT](LICENSE)
