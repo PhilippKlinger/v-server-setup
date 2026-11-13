@@ -2,6 +2,8 @@
 
 How the production VPS (Hostinger KVM, Ubuntu LTS, Frankfurt) was set up, hardened and is operated. Every step names the decision behind it and how to verify it.
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ## Table of Contents
 
 - [Task](#task)
